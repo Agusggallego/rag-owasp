@@ -1,0 +1,29 @@
+@'
+.env
+.env.local
+*.key
+*.pem
+*.p12
+credentials.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+venv/
+env/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+# Artefactos generados (se reconstruyen)
+data/index/
+
+# Editor y sistema operativo
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+'@ | Set-Content -Path .gitignore -Encoding utf8
