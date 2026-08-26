@@ -2,7 +2,7 @@
 
 Referencia oficial: https://owasp.org/Top10/2025/
 
-OWASP (Open Worldwide Application Security Project) es una fundación y comunidad abierta sin fines de lucro dedicada a mejorar la seguridad del software[cite: 2]. Este documento representa el release de concientización y referencia técnica para aplicaciones web[cite: 2]. Cada categoría se estructura como un índice para profundizar en tres dimensiones clave: Contexto (el problema y su relevancia), CWEs (clases de debilidades asociadas) y Escenarios (manifestación práctica en arquitecturas reales)[cite: 2].
+OWASP (Open Worldwide Application Security Project) es una fundación y comunidad abierta sin fines de lucro dedicada a mejorar la seguridad del software. Este documento representa el release de concientización y referencia técnica para aplicaciones web. Cada categoría se estructura como un índice para profundizar en tres dimensiones clave: Contexto (el problema y su relevancia), CWEs (clases de debilidades asociadas) y Escenarios (manifestación práctica en arquitecturas reales).
 
 ## A01:2025 Broken Access Control
 
@@ -10,7 +10,7 @@ El control de acceso hace cumplir las políticas que impiden que los usuarios ac
 
 Las debilidades comunes asociadas corresponden a CWE-200 (Exposición de información sensible), CWE-284 (Control de acceso inadecuado), CWE-639 (Referencias directas a objetos inseguras o IDOR) y CWE-862 (Falta de autorización).
 
-Un escenario típico ocurre cuando un usuario autenticado modifica un parámetro en la URL o en el cuerpo de una petición JSON (por ejemplo, alterando `account_id=105` por `account_id=106`) y la aplicación devuelve registros de otro cliente o tenant sin verificar la pertenencia del recurso en la capa de persistencia[cite: 4]. Otro escenario involucra la navegación directa hacia rutas administrativas que carecen de middleware de autorización.
+Un escenario típico ocurre cuando un usuario autenticado modifica un parámetro en la URL o en el cuerpo de una petición JSON (por ejemplo, alterando `account_id=105` por `account_id=106`) y la aplicación devuelve registros de otro cliente o tenant sin verificar la pertenencia del recurso en la capa de persistencia. Otro escenario involucra la navegación directa hacia rutas administrativas que carecen de middleware de autorización.
 
 ## A02:2025 Security Misconfiguration
 
@@ -46,11 +46,11 @@ Un escenario habitual se produce cuando una aplicación web concatena parámetro
 
 ## A06:2025 Insecure Design
 
-El diseño inseguro refiere a la ausencia de controles y patrones de seguridad durante las etapas iniciales de arquitectura y modelado de amenazas, diferenciándose de las fallas de implementación en el código[cite: 3, 4]. Un sistema con diseño inseguro puede tener código perfectamente libre de bugs sintácticos, pero carecer de defensas conceptuales frente a vectores de ataque previsibles.
+El diseño inseguro refiere a la ausencia de controles y patrones de seguridad durante las etapas iniciales de arquitectura y modelado de amenazas, diferenciándose de las fallas de implementación en el código. Un sistema con diseño inseguro puede tener código perfectamente libre de bugs sintácticos, pero carecer de defensas conceptuales frente a vectores de ataque previsibles.
 
 Se vincula con debilidades como CWE-657 (Violación de principios de diseño seguro) y CWE-1059 (Diseño con especificación de seguridad incompleta).
 
-Los escenarios de manifestación incluyen la omisión de controles de frecuencia (rate limiting) en endpoints de compra o recuperación de contraseña[cite: 3], la falta de segregación estricta entre contextos multi-tenant a nivel de base de datos[cite: 3, 4], o la creación de agentes con herramientas (tools) capaces de alterar o borrar recursos sin un flujo de confirmación explícito[cite: 3, 4].
+Los escenarios de manifestación incluyen la omisión de controles de frecuencia (rate limiting) en endpoints de compra o recuperación de contraseña, la falta de segregación estricta entre contextos multi-tenant a nivel de base de datos, o la creación de agentes con herramientas (tools) capaces de alterar o borrar recursos sin un flujo de confirmación explícito.
 
 ## A07:2025 Authentication Failures
 
@@ -70,11 +70,11 @@ Un escenario clásico consiste en la deserialización directa de objetos enviado
 
 ## A09:2025 Security Logging and Alerting Failures
 
-La insuficiencia en el registro de eventos, la monitorización deficiente y la falta de integración con sistemas de alerta impiden detectar incidentes de seguridad en tiempo real o realizar análisis forenses posteriores[cite: 4]. Sin registros auditables, los atacantes pueden permanecer dentro de la infraestructura durante meses sin ser detectados.
+La insuficiencia en el registro de eventos, la monitorización deficiente y la falta de integración con sistemas de alerta impiden detectar incidentes de seguridad en tiempo real o realizar análisis forenses posteriores. Sin registros auditables, los atacantes pueden permanecer dentro de la infraestructura durante meses sin ser detectados.
 
 Las debilidades principales son CWE-778 (Registro insuficiente) y CWE-117 (Neutralización incorrecta de salidas en logs o Log Injection).
 
-Un escenario común se da cuando los intentos de inicio de sesión fallidos, los cambios de privilegios y las transacciones críticas no generan logs estructurados ni alertas en el SIEM. Asimismo, existe el riesgo opuesto de loguear información excesiva, como contraseñas en texto claro o datos de tarjetas de crédito (PII), violando normativas de privacidad[cite: 4].
+Un escenario común se da cuando los intentos de inicio de sesión fallidos, los cambios de privilegios y las transacciones críticas no generan logs estructurados ni alertas en el SIEM. Asimismo, existe el riesgo opuesto de loguear información excesiva, como contraseñas en texto claro o datos de tarjetas de crédito (PII), violando normativas de privacidad.
 
 ## A10:2025 Mishandling of Exceptional Conditions
 
