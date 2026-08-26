@@ -1,4 +1,3 @@
-@'
 # RAG OWASP Assistant
 
 API HTTP que responde preguntas sobre seguridad de aplicaciones usando RAG
@@ -17,4 +16,3 @@ En construcción.
 - FAISS (vector store embebido)
 - Docker
 - GitHub Actions
-'@ | Set-Content -Path README.md -Encoding utf8
