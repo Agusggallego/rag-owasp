@@ -25,26 +25,30 @@ copy .env.example .env          # Windows
 
 Editar `.env` y completar:
 
-- `JWT_SECRET` — generar con `python -c "import secrets; print(secrets.token_urlsafe(48))"`
-- `LLM_API_KEY` — clave de https://console.groq.com (free tier, sin tarjeta)
+- `JWT_SECRET` — generar con:
+  `python -c "import secrets; print(secrets.token_urlsafe(48))"`
 
-Para probar **sin** clave de LLM, dejar `LLM_PROVIDER=stub`.
+**No se requiere ninguna clave de API para ejecutar el proyecto.** El
+proveedor de LLM por defecto es `stub`: un componente extractivo local que
+no sale a la red. Con esa configuración funcionan el RAG completo y todos
+los controles de seguridad.
 
-```bash
-# 3. Construir el índice vectorial
-python -m scripts.ingest
+Es una decisión deliberada: permite que el pipeline de CI corra los tests
+sin secretos, reduciendo los lugares donde vive una credencial (A02:2025 /
+LLM02).
 
-# 4. Levantar
-uvicorn app.main:app --port 8080
+Para usar un LLM generativo real (opcional):
+
+```
+LLM_PROVIDER=openai_compat
+LLM_BASE_URL=https://api.groq.com/openai/v1
+LLM_API_KEY=<clave propia de https://console.groq.com — free tier, sin tarjeta>
+LLM_MODEL=openai/gpt-oss-20b
+LLM_MAX_TOKENS=1500
 ```
 
-Abrir http://localhost:8080/docs
-
-## Cómo probarlo
-
-1. `POST /auth/token` con `{"subject": "u_demo", "scopes": ["rag:read"]}`
-2. Botón **Authorize**, pegar el `access_token` (sin escribir "Bearer")
-3. `POST /ask` con `{"question": "que es prompt injection segun OWASP"}`
+El cliente habla el formato OpenAI-compatible, así que también funciona con
+Ollama local cambiando solo `LLM_BASE_URL` y `LLM_MODEL`.
 
 Para verificar los controles de acceso:
 
