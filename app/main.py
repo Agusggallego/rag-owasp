@@ -1,10 +1,12 @@
 """API HTTP del asistente RAG sobre corpus OWASP.
 
 Orden de controles en POST /ask (Clase 4, Desarrollo Seguro + IA):
-  1. AuthN  -> 401
-  2. AuthZ  -> 403
-  3. Validación de schema -> 422
-  4. Orquestación RAG
+  1. AuthN            -> 401  (¿quién sos?)
+  2. AuthZ            -> 403  (¿qué podés hacer?)
+  3. Schema Pydantic  -> 422  (¿el formato es válido?)
+  4. Rate limit       -> 429  (¿cuánto usaste?)
+  5. Guardrail入      -> 422  (¿la pregunta es aceptable por forma?)
+  6. Orquestación RAG (que internamente valida la salida del modelo)
 """
 
 import uuid
@@ -12,15 +14,17 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
-from app.ratelimit import get_limiter
+
 from app.auth import Principal, issue_token, require_scope
 from app.config import get_settings
 from app.errors import AppError, ForbiddenError, IndexNotReadyError
+from app.guardrails import sanitize_question
 from app.llm.base import LLMProvider
 from app.llm.stub import StubLLM
 from app.rag.answer import answer_question
 from app.rag.embeddings import build_provider
 from app.rag.store import VectorStore
+from app.ratelimit import get_limiter
 from app.schemas import (
     AskRequest,
     AskResponse,
@@ -73,7 +77,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="RAG OWASP Assistant",
-    version="0.3.0",
+    version="0.4.0",
     description=(
         "Asistente RAG sobre corpus acotado de documentos OWASP.\n\n"
         "Autenticación: Bearer JWT. Obtené un token de demo en POST /auth/token."
@@ -113,6 +117,8 @@ async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
 # --------------------------------------------------------------------------
 @app.get("/healthz", response_model=HealthResponse, tags=["operación"])
 def healthz() -> HealthResponse:
+    """No devuelve versiones ni rutas internas: sería reconocimiento gratis
+    para un atacante (A02:2025)."""
     store = _state.get("store")
     return HealthResponse(
         status="ok" if store else "degraded",
@@ -147,17 +153,30 @@ def create_token(payload: TokenRequest) -> TokenResponse:
 def ask(
     payload: AskRequest,
     request: Request,
+    # 1. AuthN (401) + 2. AuthZ (403): la dependencia se resuelve ANTES de
+    #    que el cuerpo de esta función se ejecute.
+    # 3. Schema (422): Pydantic valida AskRequest antes de entrar acá.
     principal: Principal = Depends(require_scope("rag:read")),
 ) -> AskResponse:
     settings = get_settings()
+
     store = _state.get("store")
     if store is None:
         raise IndexNotReadyError("El índice no está disponible. Ejecutá la ingesta.")
-    from app.ratelimit import get_limiter
 
+    # 4. Rate limit (429). DESPUÉS de autenticar, porque la cuota se asigna
+    #    por identidad. ANTES del RAG, porque el objetivo es rechazar antes
+    #    de gastar la llamada al proveedor.
     get_limiter().check(key=principal.subject, cost_chars=len(payload.question))
+
+    # 5. Guardrail de entrada (422): normaliza unicode, quita invisibles,
+    #    rechaza relleno repetitivo y registra el sensor de injection.
+    question = sanitize_question(payload.question, settings.max_question_chars)
+
+    # 6. Orquestación RAG. Se pasa `question` (la SANEADA), nunca
+    #    payload.question: usar el original descartaría la capa 5.
     result = answer_question(
-        question=payload.question,
+        question=question,
         top_k=payload.top_k,
         store=store,
         embeddings=_state["embeddings"],
@@ -191,6 +210,7 @@ def ingest(principal: Principal = Depends(require_scope("rag:admin"))) -> dict:
     sube un documento con instrucciones y espera a que otro lo recupere.
     """
     settings = get_settings()
+    # Import local: load_corpus solo se usa en esta ruta.
     from app.rag.chunking import load_corpus
 
     chunks = load_corpus(
@@ -200,4 +220,5 @@ def ingest(principal: Principal = Depends(require_scope("rag:admin"))) -> dict:
     store.save(settings.index_dir)
     _state["store"] = store
 
+    print(f"[audit] index_rebuilt by={principal.subject} chunks={len(chunks)}")
     return {"status": "ok", "chunks": len(chunks)}

@@ -1,4 +1,4 @@
-"""Orquestador RAG: retrieval -> prompt -> LLM.
+"""Orquestador RAG: retrieval -> prompt -> LLM -> validación.
 
 Es el "AI Orchestrator" de la arquitectura de referencia de la Clase 13.
 
@@ -8,13 +8,14 @@ FLUJO
   3. neutralizar    -> sanear cada chunk antes del prompt
   4. armar prompt   -> instrucciones y datos SEPARADOS
   5. generar        -> llamada al proveedor
-  6. citar          -> devolver las fuentes usadas
+  6. validar salida -> guardrail C (output = input no confiable)
+  7. citar          -> devolver las fuentes usadas
 """
 
 from dataclasses import dataclass
 
 from app.config import Settings
-from app.guardrails import neutralize_context
+from app.guardrails import neutralize_context, validate_output
 from app.llm.base import LLMProvider
 from app.llm.stub import NOT_FOUND
 from app.rag.embeddings import EmbeddingProvider
@@ -86,13 +87,22 @@ def answer_question(
     # Si el retrieval no encontró nada parecido, NO llamamos al modelo: con
     # contexto irrelevante produce respuestas bien escritas y mal fundamentadas.
     # Beneficio secundario: ahorra el costo de la llamada.
+    #
+    # NO es un clasificador: medido sobre el corpus, las distribuciones de
+    # score dentro y fuera de dominio SE SOLAPAN (0.028 aparece en ambos
+    # grupos). Es un filtro barato; la segunda línea de defensa es la regla 1
+    # del SYSTEM_PROMPT. Defensa en profundidad.
     if not hits or top_score < settings.min_similarity_score:
         return RagResult(
             answer=(
                 "No encontré esa información en el corpus. Este asistente solo "
                 "responde sobre el material OWASP indexado."
             ),
-            hits=[], grounded=False, tokens_in=0, tokens_out=0, top_score=top_score,
+            hits=[],
+            grounded=False,
+            tokens_in=0,
+            tokens_out=0,
+            top_score=top_score,
         )
 
     # ---- 3-4. Prompt con instrucciones y datos separados ----
@@ -101,12 +111,18 @@ def answer_question(
     # ---- 5. Generación ----
     response = llm.complete(SYSTEM_PROMPT, user_prompt)
 
+    # ---- 6. Guardrail de salida (capa C) ----
+    # Clase 13: "Regla: output del modelo = input externo. Validar antes de
+    # usar." Bloquea fugas del system prompt (LLM07) y de credenciales
+    # (LLM02), y escapa markup activo (LLM05).
+    safe_answer = validate_output(response.text)
+
     # Si el modelo dijo "no encontré", no citamos fuentes: sería engañoso
     # mostrar respaldo para una respuesta que no afirma nada.
-    grounded = NOT_FOUND.lower() not in response.text.lower()
+    grounded = NOT_FOUND.lower() not in safe_answer.lower()
 
     return RagResult(
-        answer=response.text,
+        answer=safe_answer,
         hits=hits if grounded else [],
         grounded=grounded,
         tokens_in=response.tokens_in,
