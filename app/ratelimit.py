@@ -4,7 +4,7 @@ Clase 4 (Desarrollo Seguro + IA) — "En IA, limitar requests no alcanza:
 también hay que limitar tokens, costo, tool calls y modelos."
 
 DOS DIMENSIONES:
-  1. requests por identidad  -> abuso, fuerza bruta, scraping
+  1. requests por identidad    -> abuso, fuerza bruta, scraping
   2. presupuesto de CARACTERES -> costo (LLM10 / API4:2023)
 
 La segunda es la que importa en un sistema con IA: 10 requests de 50.000
@@ -13,10 +13,15 @@ el ataque económico.
 
 LIMITACIÓN DECLARADA: el contador vive en memoria del proceso. Con más de
 una réplica, cada una tendría su propio contador y el límite efectivo se
-multiplicaría. Es aceptable porque el alcance es una instancia única; con
+multiplicaría. Aceptable porque el alcance es una instancia única; con
 réplicas haría falta un store compartido (Redis). Documentado en el README.
+
+RIESGO RESIDUAL: este límite protege el PRESUPUESTO, no la DISPONIBILIDAD.
+El proveedor tiene su propio techo (~30 req/min en el free tier de Groq),
+así que dos usuarios dentro de su cuota pueden agotarlo.
 """
 
+import logging
 import threading
 import time
 from collections import deque
@@ -24,6 +29,7 @@ from dataclasses import dataclass, field
 
 from app.config import get_settings
 from app.errors import RateLimitedError
+from app.obs import RATE_LIMITED, log_event
 
 
 @dataclass
@@ -38,9 +44,9 @@ class SlidingWindowLimiter:
         self.max_chars = max_chars
         self.window = window_seconds
         self._buckets: dict[str, _Bucket] = {}
-        # Lock: uvicorn puede atender pedidos concurrentes. Sin esto, dos
-        # requests simultáneas podrían leer el contador antes de que
-        # cualquiera lo actualice y ambas pasar el límite (race condition).
+        # Lock: uvicorn puede atender requests concurrentes. Sin esto, dos
+        # simultáneas podrían leer el contador antes de que cualquiera lo
+        # actualice y ambas pasar el límite (race condition).
         self._lock = threading.Lock()
 
     def _prune(self, bucket: _Bucket, now: float) -> None:
@@ -61,6 +67,11 @@ class SlidingWindowLimiter:
             # --- Dimensión 1: cantidad de requests ---
             if len(bucket.hits) >= self.max_requests:
                 retry_after = int(self.window - (now - bucket.hits[0])) + 1
+                RATE_LIMITED.labels(dimension="requests").inc()
+                log_event(
+                    logging.WARNING, "rate_limit_exceeded",
+                    dimension="requests", subject=key,
+                )
                 raise RateLimitedError(
                     "Superaste el límite de requests.",
                     retry_after_seconds=retry_after,
@@ -73,6 +84,12 @@ class SlidingWindowLimiter:
                     int(self.window - (now - bucket.chars[0][0])) + 1
                     if bucket.chars
                     else self.window
+                )
+                RATE_LIMITED.labels(dimension="chars").inc()
+                log_event(
+                    logging.WARNING, "rate_limit_exceeded",
+                    dimension="chars", subject=key,
+                    used_chars=used, requested_chars=cost_chars,
                 )
                 raise RateLimitedError(
                     "Superaste el presupuesto de caracteres.",

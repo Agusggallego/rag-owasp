@@ -5,15 +5,17 @@ Orden de controles en POST /ask (Clase 4, Desarrollo Seguro + IA):
   2. AuthZ            -> 403  (¿qué podés hacer?)
   3. Schema Pydantic  -> 422  (¿el formato es válido?)
   4. Rate limit       -> 429  (¿cuánto usaste?)
-  5. Guardrail入      -> 422  (¿la pregunta es aceptable por forma?)
+  5. Guardrail entrada-> 422  (¿la pregunta es aceptable por forma?)
   6. Orquestación RAG (que internamente valida la salida del modelo)
 """
 
-import uuid
+import logging
+import time
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.responses import JSONResponse
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.auth import Principal, issue_token, require_scope
 from app.config import get_settings
@@ -21,6 +23,14 @@ from app.errors import AppError, ForbiddenError, IndexNotReadyError
 from app.guardrails import sanitize_question
 from app.llm.base import LLMProvider
 from app.llm.stub import StubLLM
+from app.obs import (
+    LATENCY,
+    REQUESTS,
+    log_event,
+    new_request_id,
+    request_id_ctx,
+    setup_logging,
+)
 from app.rag.answer import answer_question
 from app.rag.embeddings import build_provider
 from app.rag.store import VectorStore
@@ -50,6 +60,7 @@ def build_llm() -> LLMProvider:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
+    setup_logging()
 
     _state["embeddings"] = build_provider(
         settings.embeddings_provider,
@@ -65,25 +76,85 @@ async def lifespan(app: FastAPI):
         # inválidos.
         store.restore_provider(_state["embeddings"])
         _state["store"] = store
-        print(f"[startup] índice cargado: {len(store)} chunks")
+        log_event(
+            logging.INFO, "index_loaded",
+            chunks=len(store), provider=store.provider_name,
+        )
     except FileNotFoundError:
         # Arrancamos igual: /healthz reporta degraded y /ask devuelve 503.
-        # Fallar el arranque haría imposible diagnosticar el problema.
+        # Fallar el arranque haría imposible diagnosticar el problema (A10).
         _state["store"] = None
-        print("[startup] ADVERTENCIA: índice no encontrado")
+        log_event(logging.ERROR, "index_missing", index_dir=settings.index_dir)
 
+    log_event(
+        logging.INFO, "startup",
+        environment=settings.environment,
+        llm_provider=settings.llm_provider,
+        embeddings_provider=settings.embeddings_provider,
+    )
     yield
+    log_event(logging.INFO, "shutdown")
 
 
 app = FastAPI(
     title="RAG OWASP Assistant",
-    version="0.4.0",
+    version="0.5.1",
     description=(
         "Asistente RAG sobre corpus acotado de documentos OWASP.\n\n"
         "Autenticación: Bearer JWT. Obtené un token de demo en POST /auth/token."
     ),
     lifespan=lifespan,
 )
+
+
+# --------------------------------------------------------------------------
+# Middleware: request_id, latencia, métricas, cabeceras de hardening
+# --------------------------------------------------------------------------
+@app.middleware("http")
+async def observability_middleware(request: Request, call_next):
+    request_id = new_request_id()
+    request_id_ctx.set(request_id)
+    request.state.request_id = request_id
+
+    route = f"{request.method} {request.url.path}"
+    started = time.perf_counter()
+
+    try:
+        response = await call_next(request)
+        status = response.status_code
+    except Exception:
+        # Red de seguridad: cualquier excepción no controlada se convierte en
+        # un 500 genérico. A10:2025 — nunca filtrar el traceback al cliente.
+        log_event(logging.ERROR, "unhandled_exception", route=route)
+        status = 500
+        response = JSONResponse(
+            status_code=500,
+            content=ErrorResponse(
+                error="internal_error",
+                message="Ocurrió un error interno.",
+                request_id=request_id,
+            ).model_dump(exclude_none=True),
+        )
+
+    elapsed = time.perf_counter() - started
+    LATENCY.labels(route=route).observe(elapsed)
+    REQUESTS.labels(route=route, status=str(status)).inc()
+
+    response.headers["X-Request-ID"] = request_id
+    # Cabeceras de hardening. A02:2025 — Security Misconfiguration.
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Cache-Control"] = "no-store"
+
+    if request.url.path not in ("/metrics", "/healthz"):
+        log_event(
+            logging.INFO, "http_request",
+            route=route, status=status,
+            latency_ms=round(elapsed * 1000, 2),
+        )
+
+    return response
 
 
 # --------------------------------------------------------------------------
@@ -96,7 +167,7 @@ async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
     body = ErrorResponse(
         error=exc.error_code,
         message=exc.message,
-        request_id=f"req-{uuid.uuid4().hex[:12]}",
+        request_id=getattr(request.state, "request_id", "-"),
         retry_after_seconds=exc.retry_after_seconds,
     )
     headers = {}
@@ -127,6 +198,17 @@ def healthz() -> HealthResponse:
     )
 
 
+@app.get("/metrics", tags=["operación"])
+def metrics() -> Response:
+    """Métricas Prometheus.
+
+    NOTA DE SEGURIDAD: en producción este endpoint NO debería estar expuesto
+    a internet — va detrás de red interna o con auth propia. Queda abierto acá
+    para que sea verificable en la defensa. Riesgo aceptado y documentado.
+    """
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
 # --------------------------------------------------------------------------
 # Auth
 # --------------------------------------------------------------------------
@@ -143,6 +225,10 @@ def create_token(payload: TokenRequest) -> TokenResponse:
         raise ForbiddenError("Endpoint no disponible en producción.")
 
     token, ttl = issue_token(payload.subject, payload.scopes)
+    log_event(
+        logging.INFO, "token_issued",
+        subject=payload.subject, scopes=payload.scopes,
+    )
     return TokenResponse(access_token=token, expires_in=ttl, scopes=payload.scopes)
 
 
@@ -184,6 +270,25 @@ def ask(
         settings=settings,
     )
 
+    log_event(
+        logging.INFO, "ask_completed",
+        subject=principal.subject,
+        # DOS métricas distintas a propósito: retrieved_count es lo que trajo
+        # el retrieval, cited_count es lo que se le mostró al usuario. Si son
+        # distintos, el retrieval funcionó pero la respuesta no quedó
+        # fundamentada — causa muy distinta a que el retrieval no encuentre.
+        retrieved_count=result.retrieved_count,
+        cited_count=len(result.hits),
+        top_score=round(result.top_score, 4),
+        grounded=result.grounded,
+        tokens_in=result.tokens_in,
+        tokens_out=result.tokens_out,
+        question_length=len(question),
+        # El TEXTO de la pregunta solo con LOG_PROMPTS=true. Clase 5,
+        # gobierno de observabilidad: acceso, retención, redacción.
+        **({"question": question} if settings.log_prompts else {}),
+    )
+
     return AskResponse(
         answer=result.answer,
         sources=[
@@ -196,7 +301,7 @@ def ask(
             for h in result.hits
         ],
         grounded=result.grounded,
-        request_id=f"req-{uuid.uuid4().hex[:12]}",
+        request_id=request.state.request_id,
     )
 
 
@@ -220,5 +325,11 @@ def ingest(principal: Principal = Depends(require_scope("rag:admin"))) -> dict:
     store.save(settings.index_dir)
     _state["store"] = store
 
-    print(f"[audit] index_rebuilt by={principal.subject} chunks={len(chunks)}")
+    # Nivel WARNING a propósito: es una operación privilegiada que cambia lo
+    # que sabe el sistema. Sin registro no hay forma de reconstruir quién la
+    # ejecutó (A09:2025).
+    log_event(
+        logging.WARNING, "index_rebuilt",
+        subject=principal.subject, chunks=len(chunks),
+    )
     return {"status": "ok", "chunks": len(chunks)}

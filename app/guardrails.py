@@ -26,10 +26,12 @@ El sensor existe para producir la métrica que permite DETECTAR el sondeo.
 """
 
 import html
+import logging
 import re
 import unicodedata
 
 from app.errors import GuardrailBlockedError
+from app.obs import GUARDRAIL_BLOCKS, INJECTION_SUSPECTED, log_event
 
 # --------------------------------------------------------------------------
 # Capa B — entrada
@@ -86,15 +88,18 @@ def sanitize_question(raw: str, max_chars: int) -> str:
 
     # 4. Límite duro DESPUÉS de normalizar, ANTES de gastar tokens.
     if len(text) > max_chars:
+        GUARDRAIL_BLOCKS.labels(stage="input", reason="too_long").inc()
         raise GuardrailBlockedError(
             f"La pregunta supera el máximo de {max_chars} caracteres."
         )
 
     if len(text) < 3:
+        GUARDRAIL_BLOCKS.labels(stage="input", reason="too_short").inc()
         raise GuardrailBlockedError("La pregunta es demasiado corta.")
 
     # 5. Relleno repetitivo: inflar el prompt para consumir tokens (LLM10).
     if _looks_like_padding(text):
+        GUARDRAIL_BLOCKS.labels(stage="input", reason="repetitive_padding").inc()
         raise GuardrailBlockedError("La pregunta contiene relleno repetitivo.")
 
     # 6. SENSOR de injection: se REGISTRA, no se bloquea.
@@ -102,7 +107,11 @@ def sanitize_question(raw: str, max_chars: int) -> str:
     #    legítimamente "¿qué es un system prompt según OWASP?"— sin agregar
     #    seguridad real, porque el control efectivo es arquitectónico.
     if detect_injection_markers(text):
-        print(f"[guardrail] prompt_injection_suspected len={len(text)}")
+        INJECTION_SUSPECTED.inc()
+        log_event(
+            logging.WARNING, "prompt_injection_suspected",
+            stage="input", question_length=len(text),
+        )
 
     return text
 
@@ -132,9 +141,7 @@ def neutralize_context(chunk_text: str) -> str:
     # Rompe cualquier intento de cerrar los delimitadores del prompt
     text = re.sub(
         r"<\s*/?\s*(contexto|documento|system|pregunta_usuario)\s*>",
-        "[tag]",
-        text,
-        flags=re.I,
+        "[tag]", text, flags=re.I,
     )
     return text.strip()
 
@@ -145,7 +152,7 @@ def neutralize_context(chunk_text: str) -> str:
 
 # Patrones que nunca deben salir por la respuesta (LLM02)
 _LEAK_PATTERNS = [
-    re.compile(r"\b(sk|gsk)-[A-Za-z0-9_\-]{8,}"),
+    re.compile(r"\b(sk|gsk)[-_][A-Za-z0-9_\-]{8,}"),
     re.compile(r"\beyJ[A-Za-z0-9._\-]{10,}"),              # JWT
     re.compile(r"\bBearer\s+[A-Za-z0-9._\-]{10,}", re.I),
     re.compile(r"-{2,}BEGIN [A-Z ]*PRIVATE KEY-{2,}"),
@@ -170,6 +177,7 @@ def validate_output(answer: str, max_chars: int = 4000) -> str:
     LLM05 — Improper Output Handling.
     """
     if not answer or not answer.strip():
+        GUARDRAIL_BLOCKS.labels(stage="output", reason="empty").inc()
         raise GuardrailBlockedError("El modelo devolvió una respuesta vacía.")
 
     text = answer.strip()
@@ -180,7 +188,10 @@ def validate_output(answer: str, max_chars: int = 4000) -> str:
     # 1. Fuga del system prompt (LLM07)
     for marker in _SYSTEM_PROMPT_MARKERS:
         if marker.lower() in text.lower():
-            print("[guardrail] system_prompt_leak_blocked")
+            GUARDRAIL_BLOCKS.labels(stage="output", reason="system_prompt_leak").inc()
+            log_event(logging.WARNING, "system_prompt_leak_blocked", stage="output")
+            # Mensaje genérico: no confirmarle al atacante que su técnica
+            # llegó cerca. El detalle va al log, no a la respuesta.
             raise GuardrailBlockedError(
                 "La respuesta fue bloqueada por política de seguridad."
             )
@@ -188,7 +199,8 @@ def validate_output(answer: str, max_chars: int = 4000) -> str:
     # 2. Fuga de credenciales (LLM02)
     for pattern in _LEAK_PATTERNS:
         if pattern.search(text):
-            print("[guardrail] secret_leak_blocked")
+            GUARDRAIL_BLOCKS.labels(stage="output", reason="secret_leak").inc()
+            log_event(logging.ERROR, "secret_leak_blocked", stage="output")
             raise GuardrailBlockedError(
                 "La respuesta fue bloqueada por política de seguridad."
             )
@@ -197,7 +209,8 @@ def validate_output(answer: str, max_chars: int = 4000) -> str:
     #    cliente futuro podría renderizarlo. Escapamos por defensa en
     #    profundidad, no por confianza en el consumidor.
     if _ACTIVE_MARKUP.search(text):
-        print("[guardrail] active_markup_escaped")
+        GUARDRAIL_BLOCKS.labels(stage="output", reason="active_markup").inc()
+        log_event(logging.WARNING, "active_markup_escaped", stage="output")
         text = html.escape(text)
 
     return text

@@ -1,9 +1,9 @@
 """Autenticación (JWT) y autorización (scopes).
 
 Clase 4 (Desarrollo Seguro + IA) — las tres preguntas:
-  1. ¿Quién sos?        -> authenticate()   -> 401
-  2. ¿Qué podés hacer?  -> require_scope()  -> 403
-  3. ¿Cuánto podés usar? -> ratelimit.py    -> 429
+  1. ¿Quién sos?         -> authenticate()   -> 401
+  2. ¿Qué podés hacer?   -> require_scope()  -> 403
+  3. ¿Cuánto podés usar? -> ratelimit.py     -> 429
 
 "Al hacerle al JWT un JSON.parse/base64 sólo decodificamos, no validamos."
 """
@@ -17,6 +17,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.config import get_settings
 from app.errors import ForbiddenError, UnauthorizedError
+from app.obs import AUTH_FAILURES
 
 # auto_error=False: manejamos nosotros el 401 para devolver nuestro formato
 # de error, no el genérico de FastAPI.
@@ -39,13 +40,13 @@ def issue_token(subject: str, scopes: list[str]) -> tuple[str, int]:
     settings = get_settings()
     now = int(time.time())
     payload = {
-        "sub": subject,                    # quién
-        "scope": " ".join(scopes),         # qué puede hacer
-        "iss": settings.jwt_issuer,        # quién lo emitió
-        "aud": settings.jwt_audience,      # para qué API
-        "iat": now,                        # emitido en
-        "nbf": now,                        # no válido antes de
-        "exp": now + settings.jwt_ttl_seconds,   # vence en
+        "sub": subject,                            # quién
+        "scope": " ".join(scopes),                 # qué puede hacer
+        "iss": settings.jwt_issuer,                # quién lo emitió
+        "aud": settings.jwt_audience,              # para qué API
+        "iat": now,                                # emitido en
+        "nbf": now,                                # no válido antes de
+        "exp": now + settings.jwt_ttl_seconds,     # vence en
     }
     token = jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
     return token, settings.jwt_ttl_seconds
@@ -80,15 +81,24 @@ async def authenticate(
 ) -> Principal:
     """Dependencia de FastAPI: devuelve un Principal o lanza 401."""
     if credentials is None or not credentials.credentials:
+        AUTH_FAILURES.labels(reason="missing_token").inc()
         raise UnauthorizedError("Se requiere un token Bearer.")
 
     try:
         claims = _decode(credentials.credentials)
     except jwt.ExpiredSignatureError:
+        AUTH_FAILURES.labels(reason="expired").inc()
         raise UnauthorizedError("El token expiró.")
+    except jwt.InvalidAudienceError:
+        AUTH_FAILURES.labels(reason="bad_audience").inc()
+        raise UnauthorizedError("Token inválido.")
+    except jwt.InvalidIssuerError:
+        AUTH_FAILURES.labels(reason="bad_issuer").inc()
+        raise UnauthorizedError("Token inválido.")
     except jwt.InvalidTokenError:
         # Firma inválida, alg inesperado, claims faltantes, formato roto.
         # Mensaje genérico A PROPÓSITO: no le decimos al atacante qué falló.
+        AUTH_FAILURES.labels(reason="invalid").inc()
         raise UnauthorizedError("Token inválido.")
 
     scopes = frozenset(s for s in claims.get("scope", "").split() if s)
@@ -106,6 +116,7 @@ def require_scope(scope: str):
 
     async def _check(principal: Principal = Depends(authenticate)) -> Principal:
         if not principal.has_scope(scope):
+            AUTH_FAILURES.labels(reason="missing_scope").inc()
             # 403: identidad válida, permiso insuficiente. Distinto de 401.
             raise ForbiddenError(f"Se requiere el scope '{scope}'.")
         return principal
