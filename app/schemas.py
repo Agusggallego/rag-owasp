@@ -62,3 +62,25 @@ class ErrorResponse(BaseModel):
     request_id: str
     fields: list[FieldError] | None = None
     retry_after_seconds: int | None = None
+
+class TokenRequest(BaseModel):
+    """Endpoint de demo para emitir tokens.
+
+    En un sistema real esto lo hace un Identity Provider (OAuth2/OIDC) con
+    login, MFA y JWKS. Existe acá SOLO para que la API sea probable con curl,
+    y está deshabilitado cuando ENVIRONMENT=prod.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    subject: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_\-]+$")
+    scopes: list[Literal["rag:read", "rag:admin"]] = Field(
+        default=["rag:read"], min_length=1, max_length=2
+    )
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: Literal["Bearer"] = "Bearer"
+    expires_in: int
+    scopes: list[str]
