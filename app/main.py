@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
-
+from app.ratelimit import get_limiter
 from app.auth import Principal, issue_token, require_scope
 from app.config import get_settings
 from app.errors import AppError, ForbiddenError, IndexNotReadyError
@@ -153,7 +153,9 @@ def ask(
     store = _state.get("store")
     if store is None:
         raise IndexNotReadyError("El índice no está disponible. Ejecutá la ingesta.")
+    from app.ratelimit import get_limiter
 
+    get_limiter().check(key=principal.subject, cost_chars=len(payload.question))
     result = answer_question(
         question=payload.question,
         top_k=payload.top_k,
