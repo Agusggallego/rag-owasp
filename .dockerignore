@@ -1,0 +1,30 @@
+# Secretos — NUNCA en la imagen
+# Clase 8: "el secreto no debería vivir en la imagen ni en el repositorio"
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# Entorno y caché
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Git e IDE
+.git/
+.gitignore
+.github/
+.vscode/
+.idea/
+
+# Artefactos que se regeneran dentro de la imagen
+data/index/
+
+# Docs y tests: no son necesarios en runtime
+docs/
+tests/
+README.md

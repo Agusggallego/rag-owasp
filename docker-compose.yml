@@ -1,0 +1,45 @@
+services:
+  api:
+    build: .
+    image: rag-owasp:0.5.1
+    container_name: rag-owasp
+
+    ports:
+      - "8080:8080"
+
+    env_file:
+      - .env
+
+    # ----- Hardening de runtime (Clase 8, "Compose: controles básicos") -----
+
+    # Filesystem inmutable: "reduce persistencia de malware y modificaciones
+    # inesperadas". Posible porque el índice se construyó en build-time y los
+    # logs van a stdout, no a archivo.
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+
+    # "Lista blanca de privilegios, no lista negra". El proceso no necesita
+    # ninguna capability de Linux.
+    cap_drop:
+      - ALL
+
+    # Evita escaladas vía binarios setuid. Control simple y barato.
+    security_opt:
+      - no-new-privileges:true
+
+    # Límites de recursos: "un bug o fork bomb no debería tumbar el host".
+    # Reduce el blast radius de un DoS accidental o malicioso.
+    mem_limit: 512m
+    pids_limit: 100
+    cpus: 1.0
+
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    restart: unless-stopped
