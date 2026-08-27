@@ -1,70 +1,62 @@
 # RAG OWASP Assistant
 
-API HTTP que responde preguntas sobre seguridad de aplicaciones usando RAG
-sobre un corpus acotado de documentos OWASP (Top 10:2025 Web, Top 10 for LLM
-Applications 2025, API Security Top 10:2023).
+API HTTP que responde preguntas sobre seguridad de aplicaciones usando
+recuperación aumentada (RAG) sobre un corpus acotado de documentos OWASP.
 
-Trabajo Final Integrador — Diplomatura en Seguridad en Desarrollo de Software
-e IA Aplicada, Universidad FASTA.
+**Trabajo Final Integrador** — Diplomatura en Seguridad en Desarrollo de
+Software e IA Aplicada, Universidad FASTA.
+
+---
+
+## Qué hace
+
+Recibe una pregunta en lenguaje natural, busca los fragmentos relevantes en un
+corpus de tres documentos OWASP (Top 10:2025 Web, Top 10 for LLM Applications
+2025, API Security Top 10:2023), y genera una respuesta **citando las fuentes**.
+
+Si el material indexado no contiene la respuesta, lo dice en lugar de inventar.
+
+```json
+POST /ask   { "question": "que es prompt injection segun OWASP" }
+
+{
+  "answer": "Según OWASP, el Prompt Injection consiste en la manipulación...",
+  "sources": [
+    { "doc_id": "owasp-top10-llm-2025", "section": "LLM01:2025 Prompt Injection", "score": 0.3298 },
+    { "doc_id": "owasp-top10-web-2025", "section": "A05:2025 Injection", "score": 0.1475 }
+  ],
+  "grounded": true,
+  "request_id": "req-16130847e572"
+}
+```
+
+---
 
 ## Cómo ejecutarlo
+
+### Opción A — Docker (recomendada)
+
+```bash
+cp .env.example .env      # editar y completar JWT_SECRET
+docker compose up --build
+```
+
+### Opción B — Local
 
 Requiere Python 3.12+.
 
 ```bash
-# 1. Entorno e instalación
 python -m venv .venv
-.venv\Scripts\activate          # Windows
-# source .venv/bin/activate     # Linux/macOS
+.venv\Scripts\activate            # Windows
+# source .venv/bin/activate       # Linux / macOS
+
 pip install -r requirements.txt
+cp .env.example .env              # editar y completar JWT_SECRET
 
-# 2. Configuración
-copy .env.example .env          # Windows
-# cp .env.example .env          # Linux/macOS
-```
-
-Editar `.env` y completar:
-
-- `JWT_SECRET` — generar con `python -c "import secrets; print(secrets.token_urlsafe(48))"`
-- `LLM_API_KEY` — clave de https://console.groq.com (free tier, sin tarjeta)
-
-Para probar **sin** clave de LLM, dejar `LLM_PROVIDER=stub`.
-
-```bash
-# 3. Construir el índice vectorial
-python -m scripts.ingest
-
-# 4. Levantar
+python -m scripts.ingest          # construye el índice vectorial
 uvicorn app.main:app --port 8080
 ```
 
-Abrir http://localhost:8080/docs
+Abrir **http://localhost:8080/docs**
 
-## Cómo probarlo
-
-1. `POST /auth/token` con `{"subject": "u_demo", "scopes": ["rag:read"]}`
-2. Botón **Authorize**, pegar el `access_token` (sin escribir "Bearer")
-3. `POST /ask` con `{"question": "que es prompt injection segun OWASP"}`
-
-Para verificar los controles de acceso:
-
-| Prueba | Resultado esperado |
-|---|---|
-| `/ask` sin token | `401` |
-| `/ingest` con scope `rag:read` | `403` |
-| `/ask` con campo extra `{"admin": true}` | `422` |
-| 21 pedidos en un minuto | `429` |
-
-## Documentación
-
-- [Modelo de amenazas STRIDE](docs/THREAT_MODEL.md)
-
-## Endpoints
-
-| Método | Ruta | Auth |
-|---|---|---|
-| `GET` | `/healthz` | — |
-| `GET` | `/metrics` | — |
-| `POST` | `/auth/token` | — |
-| `POST` | `/ask` | `rag:read` |
-| `POST` | `/ingest` | `rag:admin` |
+###
