@@ -496,3 +496,28 @@ de negocio"*. Disparadores concretos para este sistema:
 4. Se cambia de proveedor o de modelo → revisar **T-09** y **T-13**
 5. Se despliega con más de una réplica → revisar **T-03**
 6. Ocurre un incidente → revisar el modelo completo
+
+**Hallazgo del SCA (verificado el 31/08/2026).** `pip-audit` detectó 15
+vulnerabilidades conocidas en 3 paquetes. Dos son directamente relevantes al
+control de autenticación de este proyecto:
+
+| CVE | Paquete | Descripción | Fix |
+|---|---|---|---|
+| PYSEC-2026-179 | pyjwt 2.10.1 | no valida el uso de JWK en algoritmo HMAC: permite usar la clave pública del emisor como secreto HMAC (confusión HS/RS) | 2.13.0 |
+| PYSEC-2026-176 | pyjwt 2.10.1 | bypass del allow-list de algoritmos del lado del verificador | 2.12.1 |
+
+**Por qué importa.** Ambos describen el ataque de confusión de algoritmo que
+`app/auth.py` mitiga fijando `algorithms=[HS256]` del lado del servidor. El
+control propio estaba correctamente implementado, pero la librería tenía el
+defecto. Es LLM03 / A03:2025 en su forma más directa: **el código propio puede
+ser impecable y la vulnerabilidad entrar por una dependencia.**
+
+**Alcance real.** Ambos CVE requieren el uso de `PyJWK` / `PyJWKClient`, que
+este proyecto no utiliza (HS256 con secreto compartido, sin JWKS). La
+explotabilidad efectiva es baja. Aun así se actualizó, porque el fix está
+disponible: la política de gates de la Clase 4 es *bloquear critical/high **con
+fix disponible***.
+
+**Trazabilidad.** Este hallazgo lo produjo el gate de SCA corriendo
+manualmente, no una revisión de código. Es la evidencia de por qué el gate
+existe: ninguna lectura del código propio habría encontrado esto.
