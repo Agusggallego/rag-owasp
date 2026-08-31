@@ -411,3 +411,39 @@ Verificación:
 docker exec rag-owasp id            # uid=101(app)
 docker exec rag-owasp touch /x      # debe fallar: read-only file system
 ```
+
+## CI/CD
+
+Pipeline en GitHub Actions con tres gates.
+
+> Clase 4: *"El quality gate no es la herramienta; es la decisión de bloquear
+> o no bloquear según una señal de calidad o seguridad."*
+
+### Política de bloqueo
+
+| Señal | Decisión | Justificación |
+|---|---|---|
+| Secreto en el diff | **Bloquear** | un secreto commiteado es un incidente, no un warning |
+| Test o build falla | **Bloquear** | el cambio no es integrable |
+| Lint falla | **Bloquear** | criterio objetivo, corrección barata |
+| SAST severidad media/alta | **Bloquear** | patrón inseguro en código propio |
+| CVE CRITICAL/HIGH **con fix** en la imagen | **Bloquear** | remediación disponible |
+| CVE **sin fix disponible** | **Alertar** | bloquear detiene la entrega sin reducir riesgo |
+| Contenedor corre como root | **Bloquear** | verificación automática del control |
+
+**Gate humano:** merge a `main` requiere Pull Request aprobado (branch
+protection).
+
+### Gates no implementados, declarados
+
+| Gate | Motivo |
+|---|---|
+| IaC scan | no hay infraestructura como código |
+| DAST | requiere entorno desplegado; fuera de alcance |
+| Evaluación de RAG en CI | no hay dataset formal (riesgo residual #2) |
+
+### Alcance del pipeline
+
+Este proyecto tiene **CI** (integración validada en cada cambio) y **CD /
+Delivery** (imagen construida, escaneada y lista). **No tiene Deployment
+automático**, porque no hay entorno de despliegue — excluido por la consigna.

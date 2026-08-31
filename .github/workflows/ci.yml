@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  secret-scan:
+    name: "Gate 1 · Secret scanning"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+
+  quality:
+    name: "Gate 2 · Lint, SAST, SCA y tests"
+    runs-on: ubuntu-latest
+    env:
+      ENVIRONMENT: test
+      LLM_PROVIDER: stub
+      EMBEDDINGS_PROVIDER: hashing
+      JWT_SECRET: ci-secret-no-usar-en-produccion
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: "Lint (ruff)"
+        run: ruff check .
+
+      - name: "SAST (bandit) — patrones inseguros en el código"
+        run: bandit -r app -ll
+
+      # SCA. Clase 4: "bloquear critical/high CON FIX DISPONIBLE".
+      # continue-on-error porque bloquear un CVE sin fix detendría la entrega
+      # sin reducir riesgo: eso es fricción, no seguridad.
+      - name: "SCA (pip-audit) — dependencias con CVE"
+        run: pip-audit --desc
+        continue-on-error: true
+
+      - name: "Tests — evidencia del modelo de amenazas"
+        run: pytest -v
+
+ 
+  container:
+    name: "Gate 3 · Build y escaneo de imagen"
+    runs-on: ubuntu-latest
+    needs: quality   # no construir si la calidad falló
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Construir imagen
+        run: docker build -t rag-owasp:${{ github.sha }} .
+
+      - name: Verificar que NO corre como root
+        run: |
+          UID_ACTUAL=$(docker run --rm rag-owasp:${{ github.sha }} id -u)
+          echo "UID del proceso: $UID_ACTUAL"
+          if [ "$UID_ACTUAL" = "0" ]; then
+            echo "FALLO: el contenedor corre como root"
+            exit 1
+          fi
+
+      - name: "Container scan (Trivy)"
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: rag-owasp:${{ github.sha }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true   
+          exit-code: '1'         
