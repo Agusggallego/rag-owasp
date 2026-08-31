@@ -22,7 +22,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import faiss
-import numpy as np
 
 from app.rag.chunking import Chunk
 from app.rag.embeddings import EmbeddingProvider
